@@ -241,34 +241,7 @@ const TrainSelection = () => {
     }
   };
 
-  // Handler for explicit GEN booking from a mixed-coach train
-  const handleProceedToGen = () => {
-    const user = getStoredUser();
-    if (!user) { navigate('/login'); return; }
-    const finalSource = boardingStop || source;
-    const finalDest = droppingStop || destination;
-    const trainData = trains.find(t => t.id === selectedTrain);
-    const realTrainId = trainData?.trainDbId ?? selectedTrain; // ← always the DB train_id
-    if (finalSource && finalDest && date && selectedTrain) {
-      navigate('/gen-booking', {
-        state: {
-          trainId: realTrainId,
-          trainName: trainData?.name,
-          trainNumber: trainData?.number,
-          source: finalSource,
-          destination: finalDest,
-          date: format(date, 'PPP'),
-          isoDate: format(date, 'yyyy-MM-dd'),
-          distance: trainData?.distance ?? 0,
-        },
-      });
-    }
-  };
-
   const selectedTrainData = trains.find(t => t.id === selectedTrain);
-
-  // Determine if the selected train has a GEN compartment
-  const selectedHasGen = !!selectedTrainData?.coachTypes?.includes('GEN');
   
   // Validation Logic
   const getStopOrder = (stationName: string) => trainStops.find(s => s.station.station_name === stationName)?.stop_order || -1;
@@ -678,19 +651,7 @@ const TrainSelection = () => {
                   )}
                 </Button>
 
-                {/* Book General — only shown when the selected train has a GEN compartment */}
-                {selectedHasGen && isFormComplete && (
-                  <Button
-                    onClick={handleProceedToGen}
-                    size="lg"
-                    variant="outline"
-                    className="w-full h-14 text-base font-bold rounded-2xl border-2 border-amber-400 text-amber-700 bg-amber-50 hover:bg-amber-100 hover:border-amber-500 transition-all duration-200 shadow-md shadow-amber-500/10"
-                  >
-                    <span className="flex items-center justify-center gap-2">
-                      🚃 Book General
-                    </span>
-                  </Button>
-                )}
+
               </motion.div>
             </div>
           </motion.div>

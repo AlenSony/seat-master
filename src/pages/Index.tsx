@@ -121,37 +121,32 @@ const Index = () => {
                     <ArrowRight className="w-5 h-5" />
                   </span>
                 </button>
-              ) : (
-                /* ── Book Your Ticket — compass spin pill ── */
-                <button
-                  onClick={() => navigate('/book')}
-                  className="hero-explore-btn"
-                >
-                  <svg className="hero-explore-svg" viewBox="0 0 512 512" height="1em" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm50.7-186.9L162.4 380.6c-19.4 7.5-38.5-11.6-31-31l55.5-144.3c3.3-8.5 9.9-15.1 18.4-18.4l144.3-55.5c19.4-7.5 38.5 11.6 31 31L325.1 306.7c-3.2 8.5-9.9 15.1-18.4 18.4zM288 256a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z" />
-                  </svg>
-                  Book Ticket
-                </button>
-              )}
+              ) : ( 
+                /* ── Regular user: dual CTAs ── */
+                <>
+                  {/* Unreserved Booking — high-visibility emerald-teal gradient */}
+                  <button
+                    onClick={() => navigate('/gen-booking')}
+                    className="hero-explore-btn"
+                  >
+                    <svg className="hero-explore-svg" viewBox="0 0 512 512" height="1em" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm50.7-186.9L162.4 380.6c-19.4 7.5-38.5-11.6-31-31l55.5-144.3c3.3-8.5 9.9-15.1 18.4-18.4l144.3-55.5c19.4-7.5 38.5 11.6 31 31L325.1 306.7c-3.2 8.5-9.9 15.1-18.4 18.4zM288 256a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z" />
+                    </svg>
+                    Book Unreserved
+                  </button>
 
-              {/* ── Explore Features button ── */}
-              
-              <button
-                onClick={scrollToFeatures}
-                className="relative flex items-center px-8 py-4 overflow-hidden font-semibold text-lg transition-all bg-transparent border-2 border-primary/40 rounded-xl group hover:border-primary/60 backdrop-blur-sm"
-              >
-                <span className="absolute top-0 right-0 inline-block w-5 h-5 transition-all duration-500 ease-in-out bg-primary/30 rounded group-hover:-mr-5 group-hover:-mt-5">
-                  <span className="absolute top-0 right-0 w-6 h-6 rotate-45 translate-x-1/2 -translate-y-1/2 bg-white/20" />
-                </span>
-                <span className="absolute bottom-0 rotate-180 left-0 inline-block w-5 h-5 transition-all duration-500 ease-in-out bg-primary/30 rounded group-hover:-ml-5 group-hover:-mb-5">
-                  <span className="absolute top-0 right-0 w-6 h-6 rotate-45 translate-x-1/2 -translate-y-1/2 bg-white/20" />
-                </span>
-                <span className="absolute bottom-0 left-0 w-full h-full transition-all duration-500 ease-in-out delay-200 -translate-x-full bg-primary/15 rounded-xl group-hover:translate-x-0" />
-                <span className="relative flex items-center gap-2 text-foreground group-hover:text-primary transition-colors duration-200">
-                  Explore Features
-    
-                </span>
-              </button>
+                  {/* Reserved (Seat) Booking — compass spin pill */}
+                  <button
+                    onClick={() => navigate('/book')}
+                    className="hero-explore-btn"
+                  >
+                    <svg className="hero-explore-svg" viewBox="0 0 512 512" height="1em" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zm50.7-186.9L162.4 380.6c-19.4 7.5-38.5-11.6-31-31l55.5-144.3c3.3-8.5 9.9-15.1 18.4-18.4l144.3-55.5c19.4-7.5 38.5 11.6 31 31L325.1 306.7c-3.2 8.5-9.9 15.1-18.4 18.4zM288 256a32 32 0 1 0 -64 0 32 32 0 1 0 64 0z" />
+                    </svg>
+                    Book Reserved
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

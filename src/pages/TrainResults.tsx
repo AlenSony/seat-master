@@ -224,12 +224,11 @@ const TrainResults = () => {
                             }, {})
                         );
 
-                    const totalSeats = summary.reduce((s, c) => s + c.total_seats, 0);
+                    // Filter out GEN coaches from summary for display
+                    const reservedSummary = summary.filter(c => c.coach_type !== 'GEN');
+                    const totalSeats = reservedSummary.reduce((s, c) => s + c.total_seats, 0);
                     const trackId = String(train.run_id ?? train.train_id);
                     const isTracking = expandedTrackerId === trackId;
-                    // Detect if this train has any GEN coaches
-                    const hasGenCoach = (train.coaches || []).some((c: any) => c.coach_type === 'GEN');
-                    const reservedOnly = !hasGenCoach;
 
                     return (
                         <div 
@@ -294,18 +293,9 @@ const TrainResults = () => {
                                             {totalSeats} Seats Available
                                         </p>
                                     )}
-                                    {/* Show both buttons if GEN + Reserved coaches coexist */}
-                                    {!train.isExpired && hasGenCoach && (
-                                        <Button
-                                            onClick={() => handleBook(train, true)}
-                                            className="w-full font-bold rounded-xl bg-amber-500 hover:bg-amber-600 shadow-lg shadow-amber-500/20 text-white"
-                                        >
-                                            🚃 Book General
-                                        </Button>
-                                    )}
                                     <Button 
                                         onClick={() => !train.isExpired && handleBook(train, false)}
-                                        disabled={!!train.isExpired || !reservedOnly && !hasGenCoach}
+                                        disabled={!!train.isExpired}
                                         className={cn(
                                             "w-full font-bold rounded-xl shadow-lg transition-all",
                                             train.isExpired
@@ -346,11 +336,11 @@ const TrainResults = () => {
                                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
                                     Available Coaches
                                 </p>
-                                {summary.length === 0 ? (
+                                {reservedSummary.length === 0 ? (
                                     <p className="text-xs text-slate-400 italic">No coach information available</p>
                                 ) : (
                                     <div className="flex flex-wrap gap-2">
-                                        {summary.map((c) => {
+                                        {reservedSummary.map((c) => {
                                             const colors = getCoachColors(c.coach_type);
                                             const isSelected = travelClass === c.coach_type;
                                             return (

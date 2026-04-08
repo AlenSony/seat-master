@@ -283,9 +283,8 @@ export const releaseSeats = async (req, res) => {
 // ──────────────────────────────────────────────
 export const createGenOrder = async (req, res) => {
     try {
-        const { totalAmount, trainId, travelDate, passengerCount } = req.body;
+        const { totalAmount, trainId, travelDate } = req.body;
 
-        // ── Explicit field validation ────────────────────────────────
         if (!trainId) {
             return res.status(400).json({ error: "trainId is required." });
         }
@@ -297,47 +296,6 @@ export const createGenOrder = async (req, res) => {
             typeof travelDate === "string"
                 ? travelDate
                 : new Date(travelDate).toISOString().split("T")[0];
-
-        // Pre-flight capacity check
-        const { Op } = await import("sequelize");
-
-        const genCoaches = await Coach.findAll({
-            where: { train_id: trainId, coach_type: "GEN" },
-            include: [{ model: Seat, as: "seats" }],
-        });
-
-        if (!genCoaches.length) {
-            return res.status(400).json({ error: "No General coaches found for this train." });
-        }
-
-        const totalCapacity = genCoaches.reduce((s, c) => s + (c.capacity || 0), 0);
-        const sentinelSeatIds = genCoaches.flatMap(c => c.seats || []).map(s => s.seat_id);
-
-        let bookedCount = 0;
-        if (sentinelSeatIds.length > 0) {
-            const bks = await Booking.findAll({
-                where: {
-                    train_id: trainId,
-                    travel_date: travelDateStr,
-                    booking_status: { [Op.in]: ["confirmed", "pending"] },
-                },
-                include: [{
-                    model: Passenger,
-                    as: "passengers",
-                    where: { seat_id: { [Op.in]: sentinelSeatIds } },
-                    required: true,
-                }],
-            });
-            bookedCount = bks.reduce((s, b) => s + (b.passengers?.length || 0), 0);
-        }
-
-        const remaining = totalCapacity - bookedCount;
-        if (remaining < (parseInt(passengerCount) || 1)) {
-            return res.status(400).json({
-                error: `Only ${remaining} General seat${remaining !== 1 ? "s" : ""} remaining on this date.`,
-                remaining,
-            });
-        }
 
         const amountInPaise = Math.round(Number(totalAmount) * 100);
         if (amountInPaise <= 0) {
@@ -408,28 +366,12 @@ export const verifyGenPayment = async (req, res) => {
                 ? travelDate
                 : new Date(travelDate).toISOString().split("T")[0];
 
-        // 2. Final atomic capacity check (race-condition guard)
-        const { Op } = await import("sequelize");
+        // 2. Fetch GEN sentinel seat IDs for passenger records
         const genCoaches = await Coach.findAll({
             where: { train_id: trainId, coach_type: "GEN" },
             include: [{ model: Seat, as: "seats" }],
         });
-        const totalCapacity = genCoaches.reduce((s, c) => s + (c.capacity || 0), 0);
         const sentinelSeatIds = genCoaches.flatMap(c => c.seats || []).map(s => s.seat_id);
-
-        const existingBks = await Booking.findAll({
-            where: { train_id: trainId, travel_date: travelDateStr, booking_status: { [Op.in]: ["confirmed", "pending"] } },
-            include: [{ model: Passenger, as: "passengers", where: { seat_id: { [Op.in]: sentinelSeatIds } }, required: true }],
-        });
-        const bookedCount = existingBks.reduce((s, b) => s + (b.passengers?.length || 0), 0);
-        const remaining = totalCapacity - bookedCount;
-
-        if (remaining < passengers.length) {
-            return res.status(400).json({
-                error: `Sorry, only ${remaining} General seat${remaining !== 1 ? "s" : ""} remaining. Your payment will be refunded.`,
-                verified: false,
-            });
-        }
 
         // 3. Generate unique PNR
         let bookingNumber;

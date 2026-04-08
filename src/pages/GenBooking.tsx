@@ -1,12 +1,6 @@
 import Navbar from '@/components/Navbar';
 import { StationSearchInput } from '@/components/StationSearchInput';
 import { Button } from '@/components/ui/button';
-import { Calendar } from '@/components/ui/calendar';
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger,
-} from '@/components/ui/popover';
 import { API_BASE, getStoredUser } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
@@ -22,8 +16,7 @@ import {
     Plus,
     Sparkles,
     Ticket,
-    Train,
-    Users,
+    Users
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -37,17 +30,19 @@ declare global {
 
 interface PassengerCounts { adults: number; children: number; }
 
+// Always book for today
+const TODAY = new Date();
+const TODAY_ISO = format(TODAY, 'yyyy-MM-dd');
+const TODAY_DISPLAY = format(TODAY, 'PPP');
+
 const GenBooking = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const preState = location.state || {};
 
-    // ── Route + Date selection ──
+    // ── Route selection ──
     const [source, setSource] = useState<string>(preState.source || '');
     const [destination, setDestination] = useState<string>(preState.destination || '');
-    const [travelDate, setTravelDate] = useState<Date | undefined>(
-        preState.isoDate ? new Date(preState.isoDate) : undefined
-    );
 
     // ── Booking phase state ──
     type Phase = 'route' | 'booking';
@@ -65,23 +60,12 @@ const GenBooking = () => {
     const [isLoading, setIsLoading] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
-    const [genInfo, setGenInfo] = useState<{
-        totalCapacity: number;
-        remaining: number;
-        canBook: boolean;
-        sentinelSeatId: number | null;
-        genCoaches: { coach_number: string; sentinelSeatId: number | null }[];
-    } | null>(null);
-
     const [farePerPax, setFarePerPax] = useState(0);
     const totalPassengers = counts.adults + counts.children;
 
-    const isoDate = travelDate ? format(travelDate, 'yyyy-MM-dd') : '';
-    const displayDate = travelDate ? format(travelDate, 'PPP') : '';
+    const isRouteValid = source && destination && source !== destination;
 
-    const isRouteValid = source && destination && source !== destination && travelDate;
-
-    // ── Auto-search and proceed when pre-state has trainId ──
+    // ── Auto-proceed when pre-state has trainId ──
     useEffect(() => {
         if (preState.trainId) {
             setPhase('booking');
@@ -93,7 +77,7 @@ const GenBooking = () => {
         if (!isRouteValid) return;
         setIsSearching(true);
         try {
-            const query = new URLSearchParams({ source, destination, date: isoDate });
+            const query = new URLSearchParams({ source, destination, date: TODAY_ISO });
             const res = await fetch(`${API_BASE}/trains/search?${query.toString()}`);
             if (!res.ok) { toast.error('Failed to search trains.'); return; }
             const data = await res.json();
@@ -120,31 +104,13 @@ const GenBooking = () => {
         }
     };
 
-    // ── Fetch GEN availability + fare ──
+    // ── Fetch fare only ──
     useEffect(() => {
-        if (phase !== 'booking' || !trainId || !isoDate) return;
+        if (phase !== 'booking' || !trainId) return;
 
         const init = async () => {
             setIsLoading(true);
             try {
-                const avRes = await fetch(`${API_BASE}/trains/${trainId}/gen-availability?date=${isoDate}&passengerCount=${totalPassengers}`);
-                if (!avRes.ok) {
-                    const e = await avRes.json();
-                    toast.error(e.error || 'No General coaches available for this train.');
-                    return;
-                }
-                const avData = await avRes.json();
-                setGenInfo({
-                    totalCapacity: avData.totalCapacity,
-                    remaining: avData.remaining,
-                    canBook: !!avData.canBook,
-                    sentinelSeatId: avData.genCoaches?.[0]?.sentinelSeatId ?? null,
-                    genCoaches: (avData.genCoaches ?? []).map((c: { coach_number: string; sentinelSeatId?: number | null }) => ({
-                        coach_number: c.coach_number,
-                        sentinelSeatId: c.sentinelSeatId ?? null,
-                    })),
-                });
-
                 const backendTrainType = trainCategory === 'SUPERFAST' ? 'SUPERFAST' : trainCategory === 'MAIL/EXP' ? 'EXPRESS' : 'LOCAL';
                 const fareRes = await fetch(`${API_BASE}/trains/fare`, {
                     method: 'POST',
@@ -164,13 +130,13 @@ const GenBooking = () => {
                 }
             } catch (err) {
                 console.error(err);
-                toast.error('Failed to load General coach info.');
+                toast.error('Failed to load fare info.');
             } finally {
                 setIsLoading(false);
             }
         };
         init();
-    }, [phase, trainId, isoDate, distanceKm, trainCategory, totalPassengers]);
+    }, [phase, trainId, distanceKm, trainCategory]);
 
     const handleCountChange = (type: 'adults' | 'children', delta: number) => {
         setCounts(prev => {
@@ -187,7 +153,6 @@ const GenBooking = () => {
         const user = getStoredUser();
         if (!user) { toast.error('Please login first'); navigate('/login'); return; }
         if (!trainId) { toast.error('No train found.'); return; }
-        if (!isoDate) { toast.error('No travel date selected.'); return; }
         const safeTotal = Math.max(totalFare, 1);
 
         setIsSubmitting(true);
@@ -195,7 +160,7 @@ const GenBooking = () => {
             const orderRes = await fetch(`${API_BASE}/payments/create-gen-order`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ totalAmount: safeTotal, trainId, travelDate: isoDate, passengerCount: totalPassengers, validityHours: 3 }),
+                body: JSON.stringify({ totalAmount: safeTotal, trainId, travelDate: TODAY_ISO, passengerCount: totalPassengers, validityHours: 3 }),
             });
             if (!orderRes.ok) { const e = await orderRes.json(); throw new Error(e.error || 'Failed to create payment order.'); }
             const order = await orderRes.json();
@@ -237,13 +202,12 @@ const GenBooking = () => {
                                 trainId,
                                 sourceStation: source,
                                 destinationStation: destination,
-                                travelDate: isoDate,
+                                travelDate: TODAY_ISO,
                                 passengers: Array.from({ length: totalPassengers }).map((_, i) => ({
                                     name: i < counts.adults ? 'Adult' : 'Child',
                                     gender: 'other'
                                 })),
                                 totalAmount: safeTotal,
-                                sentinelSeatId: genInfo?.sentinelSeatId,
                             }),
                         });
                         const data = await verifyRes.json();
@@ -305,29 +269,28 @@ const GenBooking = () => {
                     <div className="flex flex-wrap items-center justify-between gap-6">
                         <div className="flex flex-col gap-3">
                             <div className="flex items-center gap-3">
-                                <div className="p-2.5 rounded-2xl backdrop-blur-sm shadow-lg" style={{ backgroundColor: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.1)' }}>
-                                    <Ticket className="w-6 h-6" style={{ color: '#fff' }} />
+                                <div className="p-2.5 rounded-2xl backdrop-blur-sm shadow-lg" style={{ backgroundColor: 'rgba(198, 190, 190, 0.35)', border: '1px solid rgba(255,255,255,0.1)' }}>
+                                    <Ticket className="w-6 h-6" style={{ color: 'rgba(14, 104, 62, 1)'}} />
                                 </div>
                                 <div>
-                                    <h1 className="text-2xl font-bold tracking-tight leading-none" style={{ color: '#fff' }}>
+                                    <h1 className="text-2xl font-bold tracking-tight leading-none" style={{ color: 'rgba(14, 104, 62, 1)' }}>
                                         Unreserved Ticket
                                     </h1>
                                     <div className="flex items-center gap-2 mt-1">
-                                        <span className="text-xs px-2.5 py-0.5 rounded-full font-semibold backdrop-blur-sm" style={{ backgroundColor: 'rgba(255,255,255,0.15)', color: '#d1fae5', border: '1px solid rgba(255,255,255,0.2)' }}>
+                                        <span className="text-xs px-2.5 py-0.5 rounded-full font-semibold backdrop-blur-sm" style={{ backgroundColor: 'rgba(24, 19, 19, 0.15)', color: '#d1fae5', border: '1px solid rgba(255,255,255,0.2)' }}>
                                             GEN · General Coach
                                         </span>
-                                        <span className="text-xs flex items-center gap-1" style={{ color: 'rgba(167,243,208,0.7)' }}>
+                                        <span className="text-xs flex items-center gap-1" style={{ color: 'rgba(14, 104, 62, 0.7)' }}>
                                             <Clock className="w-3 h-3" /> Valid 3 hours
                                         </span>
                                     </div>
                                 </div>
                             </div>
-                            {displayDate && (
-                                <div className="flex items-center gap-2 ml-1">
-                                    <CalendarDays className="w-3.5 h-3.5" style={{ color: '#6ee7b7' }} />
-                                    <span className="text-sm font-medium" style={{ color: '#d1fae5' }}>{displayDate}</span>
-                                </div>
-                            )}
+                            {/* Today's date always shown */}
+                            <div className="flex items-center gap-2 ml-1">
+                                <CalendarDays className="w-3.5 h-3.5" style={{ color: '#6ee7b7' }} />
+                                <span className="text-sm font-medium" style={{ color: '#43b87cff' }}>Today · {TODAY_DISPLAY}</span>
+                            </div>
                         </div>
 
                         {/* Route Pill (when route selected) */}
@@ -336,22 +299,22 @@ const GenBooking = () => {
                                 <div className="flex flex-col items-center">
                                     <MapPin className="w-4 h-4 mb-1" style={{ color: '#6ee7b7' }} />
                                     <span className="text-[10px] uppercase tracking-widest font-semibold" style={{ color: '#6ee7b7' }}>From</span>
-                                    <span className="font-bold text-lg mt-0.5" style={{ color: '#fff' }}>{source}</span>
+                                    <span className="font-bold text-lg mt-0.5" style={{ color: '#16833c' }}>{source}</span>
                                 </div>
                                 <div className="flex flex-col items-center gap-1 px-2">
                                     <div className="flex items-center gap-1">
-                                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: 'rgba(255,255,255,0.6)' }} />
-                                        <div className="w-10 h-0.5" style={{ background: 'linear-gradient(to right, rgba(255,255,255,0.3), rgba(255,255,255,0.7), rgba(255,255,255,0.3))' }} />
-                                        <ArrowRight className="w-4 h-4" style={{ color: '#fff' }} />
-                                        <div className="w-10 h-0.5" style={{ background: 'linear-gradient(to right, rgba(255,255,255,0.3), rgba(255,255,255,0.7), rgba(255,255,255,0.3))' }} />
-                                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: 'rgba(255,255,255,0.6)' }} />
+                                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#16833c' }} />
+                                        <div className="w-10 h-0.5" style={{ background: 'linear-gradient(to right, #16833c, #16833c, #16833c)' }} />
+                                        <ArrowRight className="w-4 h-4" style={{ color: '#16833c' }} />
+                                        <div className="w-10 h-0.5" style={{ background: 'linear-gradient(to right, #16833c, #16833c, #16833c)' }} />
+                                        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#16833c' }} />
                                     </div>
-                                    <span className="text-[9px] uppercase tracking-widest" style={{ color: 'rgba(255,255,255,0.4)' }}>Journey</span>
+                                    <span className="text-[9px] uppercase tracking-widest" style={{ color: '#16833c' }}>Journey</span>
                                 </div>
                                 <div className="flex flex-col items-center">
                                     <MapPin className="w-4 h-4 mb-1" style={{ color: '#5eead4' }} />
                                     <span className="text-[10px] uppercase tracking-widest font-semibold" style={{ color: '#6ee7b7' }}>To</span>
-                                    <span className="font-bold text-lg mt-0.5" style={{ color: '#fff' }}>{destination}</span>
+                                    <span className="font-bold text-lg mt-0.5" style={{ color: '#16833c' }}>{destination}</span>
                                 </div>
                             </div>
                         )}
@@ -371,7 +334,7 @@ const GenBooking = () => {
                                 Quick Unreserved Booking
                             </div>
                             <p className="text-muted-foreground text-base max-w-md mx-auto">
-                                Select your route and travel date to instantly book a General (GEN) coach ticket.
+                                Select your route to instantly book a General (GEN) coach ticket for <span className="font-semibold text-slate-700">today</span>.
                             </p>
                         </div>
 
@@ -409,53 +372,13 @@ const GenBooking = () => {
                                     </div>
                                 </div>
 
-                                {/* Connector Strip */}
-                                <div className="flex items-center gap-3 px-4">
-                                    <div className="flex-1 h-px bg-gradient-to-r from-emerald-200 via-emerald-300 to-teal-200" />
-                                    <div className="p-1.5 bg-emerald-50 rounded-full border border-emerald-200 text-emerald-500">
-                                        <CalendarDays className="w-3.5 h-3.5" />
+                                {/* Today's date info strip */}
+                                <div className="flex items-center gap-3 px-4 py-3 rounded-2xl" style={{ backgroundColor: '#f0fdf4', border: '1px solid #16833cff' }}>
+                                    <CalendarDays className="w-4 h-4 text-emerald-600 shrink-0" />
+                                    <div className="flex-1">
+                                        <p className="text-sm font-semibold text-emerald-800">Booking for Today</p>
+                                        <p className="text-xs text-emerald-600">{TODAY_DISPLAY} — General tickets are only valid for same-day travel</p>
                                     </div>
-                                    <div className="flex-1 h-px bg-gradient-to-r from-teal-200 via-emerald-300 to-emerald-200" />
-                                </div>
-
-                                {/* Date Picker */}
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider pl-1">Travel Date</label>
-                                    <Popover>
-                                        <PopoverTrigger asChild>
-                                            <Button
-                                                variant="outline"
-                                                className={cn(
-                                                    "w-full h-16 justify-start text-left font-normal text-base rounded-2xl border-slate-200 transition-all shadow-sm",
-                                                    travelDate
-                                                        ? "ring-2 ring-emerald-500/15 border-emerald-400/60 hover:border-emerald-500"
-                                                        : "text-slate-400 hover:border-emerald-300 hover:bg-emerald-50/50"
-                                                )}
-                                            >
-                                                <div className="flex items-center gap-4 px-1">
-                                                    <div className={cn("p-2 rounded-lg transition-colors", travelDate ? "bg-emerald-50" : "bg-slate-50")}>
-                                                        <CalendarDays className={cn("w-5 h-5", travelDate ? "text-emerald-600" : "text-slate-400")} />
-                                                    </div>
-                                                    <div className="flex flex-col">
-                                                        <span className={cn(travelDate ? "text-foreground font-medium" : "text-slate-400")}>
-                                                            {travelDate ? format(travelDate, "MMMM d, yyyy") : "Select a date"}
-                                                        </span>
-                                                        {travelDate && <span className="text-xs text-slate-500 leading-none">{format(travelDate, "EEEE")}</span>}
-                                                    </div>
-                                                </div>
-                                            </Button>
-                                        </PopoverTrigger>
-                                        <PopoverContent className="w-auto p-0 rounded-2xl shadow-xl border-slate-100" align="start">
-                                            <Calendar
-                                                mode="single"
-                                                selected={travelDate}
-                                                onSelect={setTravelDate}
-                                                disabled={(d) => d < new Date(new Date().setHours(0,0,0,0))}
-                                                initialFocus
-                                                className="p-4"
-                                            />
-                                        </PopoverContent>
-                                    </Popover>
                                 </div>
 
                                 {/* Proceed Button */}
@@ -522,7 +445,7 @@ const GenBooking = () => {
                         <div className="mb-6">
                             <Button
                                 variant="ghost"
-                                onClick={() => { setPhase('route'); setGenInfo(null); setTrainId(null); }}
+                                onClick={() => { setPhase('route'); setTrainId(null); }}
                                 className="text-muted-foreground hover:text-foreground pl-0 hover:pl-2 transition-all"
                             >
                                 <ArrowLeft className="w-4 h-4 mr-2" /> Change Route
@@ -535,27 +458,12 @@ const GenBooking = () => {
                                     <div className="w-16 h-16 border-4 border-emerald-100 rounded-full" />
                                     <div className="absolute inset-0 w-16 h-16 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
                                 </div>
-                                <p className="text-muted-foreground font-medium animate-pulse">Loading fare & availability…</p>
+                                <p className="text-muted-foreground font-medium animate-pulse">Loading fare…</p>
                             </div>
                         ) : (
                             <div className="grid lg:grid-cols-3 gap-8">
                                 {/* ── Left: Config ── */}
                                 <div className="lg:col-span-2 space-y-5">
-                                    {/* Train info mini-card */}
-                                    {trainName && (
-                                        <div className="bg-white rounded-2xl shadow-sm p-4 flex items-center gap-4" style={{ border: '1px solid #a7f3d0' }}>
-                                            <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-inner" style={{ backgroundColor: '#ecfdf5', color: '#059669' }}>
-                                                <Train className="w-6 h-6" />
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <p className="font-bold" style={{ color: '#1e293b' }}>{trainName}</p>
-                                                <p className="text-sm" style={{ color: '#64748b' }}>#{trainNumber} {distanceKm > 0 && `· ${distanceKm} km`}</p>
-                                            </div>
-                                            <span className="px-3 py-1 rounded-full text-xs font-bold" style={{ backgroundColor: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
-                                                GEN
-                                            </span>
-                                        </div>
-                                    )}
 
                                     {/* Train Type selector */}
                                     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
@@ -571,10 +479,10 @@ const GenBooking = () => {
                                                             ? "bg-gradient-to-br from-emerald-600 to-teal-600 border-emerald-600 shadow-md shadow-emerald-500/20"
                                                             : "bg-white border-slate-200 hover:border-emerald-300 hover:bg-emerald-50"
                                                     )}
-                                                    style={trainCategory === type ? { color: '#fff' } : { color: '#64748b' }}
+                                                    style={trainCategory === type ? { color: 'rgba(14, 104, 62, 1)' } : { color: '#000000ff' }}
                                                 >
                                                     <span>{type}</span>
-                                                    <span className="text-xs font-normal" style={{ color: trainCategory === type ? 'rgba(255,255,255,0.7)' : 'rgba(100,116,139,0.7)' }}>
+                                                    <span className="text-xs font-normal" style={{ color: trainCategory === type ? 'rgba(14, 104, 62, 1)' : 'rgba(100,116,139,0.7)' }}>
                                                         from ₹{MIN_FARES[type]}
                                                     </span>
                                                 </button>
@@ -646,9 +554,9 @@ const GenBooking = () => {
                                 <div className="lg:col-span-1">
                                     <div className="sticky top-24 bg-white rounded-2xl shadow-lg overflow-hidden" style={{ border: '1px solid #e2e8f0' }}>
                                         {/* Header */}
-                                        <div className="p-5" style={{ background: 'linear-gradient(to right, #059669, #0d9488)', color: '#fff' }}>
+                                        <div className="p-5" style={{ background: 'linear-gradient(to right, #059669, #0d9488)', color: '#000000ff' }}>
                                             <p className="text-xs font-semibold uppercase tracking-wider mb-0.5" style={{ color: '#a7f3d0' }}>Booking Summary</p>
-                                            <p className="font-bold text-lg" style={{ color: '#fff' }}>General (Unreserved)</p>
+                                            <p className="font-bold text-lg" style={{ color: '#000000ff' }}>General (Unreserved)</p>
                                         </div>
 
                                         {/* Breakdown */}
@@ -659,7 +567,7 @@ const GenBooking = () => {
                                             </div>
                                             <div className="flex justify-between text-sm">
                                                 <span style={{ color: '#64748b' }}>Date</span>
-                                                <span className="font-medium" style={{ color: '#1e293b' }}>{displayDate}</span>
+                                                <span className="font-medium" style={{ color: '#1e293b' }}>Today · {TODAY_DISPLAY}</span>
                                             </div>
                                             <div style={{ borderTop: '1px solid #f1f5f9', margin: '4px 0' }} />
                                             <div className="flex justify-between text-sm">
@@ -698,21 +606,12 @@ const GenBooking = () => {
                                             <Button
                                                 id="gen-book-btn"
                                                 onClick={handlePay}
-                                                disabled={isSubmitting || !genInfo?.canBook}
+                                                disabled={isSubmitting}
                                                 className="w-full font-bold text-base py-6 rounded-xl shadow-lg transition-all"
                                                 style={{ background: 'linear-gradient(to right, #059669, #0d9488)', color: '#fff' }}
                                             >
-                                                {isSubmitting
-                                                    ? 'Processing…'
-                                                    : genInfo?.canBook
-                                                        ? 'Proceed to Payment'
-                                                        : 'No Seats Available'}
+                                                {isSubmitting ? 'Processing…' : 'Proceed to Payment'}
                                             </Button>
-                                            {genInfo && !genInfo.canBook && (
-                                                <p className="text-center text-xs mt-2" style={{ color: '#64748b' }}>
-                                                    This train's General coaches are full for the selected date.
-                                                </p>
-                                            )}
                                         </div>
                                     </div>
                                 </div>

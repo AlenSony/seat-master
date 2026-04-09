@@ -160,6 +160,35 @@ function releaseSeatsBySocket(socketId) {
     }
 }
 
+/**
+ * Broadcast a structured seat_status_updated event to all connected clients.
+ * This is the canonical event that React components listen to for TanStack Query
+ * cache invalidation — it carries enough context to invalidate the exact query.
+ *
+ * @param {object} payload
+ * @param {string|number} payload.trainId
+ * @param {string|number|null} payload.coachId
+ * @param {number[]} payload.seatIds
+ * @param {string} payload.date  - ISO date string "YYYY-MM-DD"
+ */
+export const emitSeatStatusUpdate = ({ trainId, coachId, seatIds, date }) => {
+    if (!io) {
+        console.warn("emitSeatStatusUpdate called before Socket.io was initialized");
+        return;
+    }
+    try {
+        io.emit("seat_status_updated", {
+            train_id: trainId,
+            coach_id: coachId,
+            seat_ids: seatIds,
+            date,
+        });
+        console.log(`[socket] seat_status_updated emitted — train=${trainId} coach=${coachId} seats=${seatIds}`);
+    } catch (e) {
+        console.error("Failed to emit seat_status_updated:", e);
+    }
+};
+
 export const getIO = () => {
     if (!io) throw new Error("Socket.io not initialized");
     return io;

@@ -6,6 +6,7 @@ import { SeatMap } from '@/components/SeatMap';
 import { Button } from '@/components/ui/button';
 import { SeatType as BerthType, CoachLayout, CoachRow, Seat as SeatType } from '@/data/coachLayouts';
 import { API_BASE, getStoredUser } from '@/lib/api';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertCircle, ArrowLeft, ArrowRight, CalendarDays, MapPin, Train } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -27,6 +28,9 @@ const SeatBooking = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { trainId, source, destination, date, isoDate, distance, quota } = location.state || {}; // distance comes from TrainResults
+
+  // TanStack Query client — used to invalidate seat-availability cache on real-time updates
+  const queryClient = useQueryClient();
 
   const [train, setTrain] = useState<any>(null);
   const [coachLayouts, setCoachLayouts] = useState<Record<string, CoachLayout>>({});
@@ -161,9 +165,36 @@ const SeatBooking = () => {
         updateSeatStatus(payload.seatIds, 'booked');
     });
 
+    /**
+     * seat_status_updated — emitted by the server after every successful booking commit.
+     * Payload: { train_id, coach_id, seat_ids, date }
+     *
+     * We use TanStack Query's invalidateQueries to trigger a background refetch of the
+     * availability data so the seat map reflects the true DB state instantly, without
+     * requiring a full page reload or manual user action.
+     */
+    newSocket.on("seat_status_updated", (payload: {
+      train_id: string | number;
+      coach_id: string | number | null;
+      seat_ids: number[];
+      date: string;
+    }) => {
+      // Only act on events that affect the current journey
+      if (String(payload.train_id) !== String(trainId)) return;
+      if (payload.date && payload.date !== isoDate) return;
+
+      // Optimistically mark the affected seats as booked in the local seat map
+      updateSeatStatus(payload.seat_ids, 'booked');
+
+      // Invalidate the server-side availability cache so the next render gets
+      // fresh data from the DB (handles edge cases where optimistic update diverges)
+      queryClient.invalidateQueries({ queryKey: ['seatAvailability', trainId, isoDate] });
+    });
+
     return () => {
         newSocket.disconnect();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -242,24 +273,31 @@ const SeatBooking = () => {
     setSelectedSeats([]);
   }, [selectedCoach]);
 
-  // Fetch availability when train details change
+  // ── Seat Availability Query (TanStack Query) ────────────────────────────────
+  // Keyed by ['seatAvailability', trainId, isoDate] so the socket handler's
+  // queryClient.invalidateQueries call triggers an automatic background refetch.
+  const { data: availData } = useQuery({
+    queryKey: ['seatAvailability', trainId, isoDate],
+    queryFn: async () => {
+      if (!trainId || !isoDate || !source || !destination) return null;
+      const res = await fetch(
+        `${API_BASE}/trains/${trainId}/availability?date=${isoDate}&source=${source}&destination=${destination}`
+      );
+      if (!res.ok) throw new Error('Availability fetch failed');
+      return res.json() as Promise<{ bookedSeatIds: string[]; lockedSeatIds: string[] }>;
+    },
+    enabled: Boolean(trainId && isoDate && source && destination),
+    staleTime: 30_000, // treat data as fresh for 30s; socket events force earlier invalidation
+    refetchOnWindowFocus: false,
+  });
+
+  // Sync query result into local state whenever it changes
   useEffect(() => {
-    if (!trainId || !isoDate || !source || !destination) return;
-    const fetchAvail = async () => {
-      try {
-        const res = await fetch(`${API_BASE}/trains/${trainId}/availability?date=${isoDate}&source=${source}&destination=${destination}`);
-        if (res.ok) {
-          const { bookedSeatIds: ids, lockedSeatIds: lIds } = await res.json();
-          // Ensure IDs are strings to match frontend model
-          setBookedSeatIds(new Set(ids.map(String)));
-          setLockedAPISeatIds(new Set((lIds || []).map(String)));
-        }
-      } catch (err) {
-        console.error("Availability fetch failed", err);
-      }
-    };
-    fetchAvail();
-  }, [trainId, isoDate, source, destination]);
+    if (!availData) return;
+    setBookedSeatIds(new Set((availData.bookedSeatIds || []).map(String)));
+    setLockedAPISeatIds(new Set((availData.lockedSeatIds || []).map(String)));
+  }, [availData]);
+
 
   // Fetch fares and update seat status when selectedCoach OR availability changes
   useEffect(() => {

@@ -1,7 +1,22 @@
 import crypto from "crypto";
 import Razorpay from "razorpay";
-import { Booking, Coach, Passenger, Seat, Train } from "../models/index.js";
-import { activeLocks, getIO } from "../sockets.js";
+import { Transaction } from "sequelize";
+import { Booking, Coach, Passenger, Seat, Train, sequelize } from "../models/index.js";
+import { activeLocks, emitSeatStatusUpdate, getIO } from "../sockets.js";
+
+// ── Detect transient DB errors worth handling distinctly ──────────────────────
+const isDeadlockOrTimeout = (err) => {
+    const code = err?.original?.code || err?.parent?.code || "";
+    const msg  = (err?.message || "").toLowerCase();
+    // PostgreSQL: 40P01 = deadlock detected | 55P03 = lock_not_available | 57014 = statement_timeout
+    return (
+        code === "40P01" ||
+        code === "55P03" ||
+        code === "57014" ||
+        msg.includes("deadlock") ||
+        msg.includes("timeout")
+    );
+};
 
 // Initialize Razorpay instance using test mode keys from .env
 const razorpay = new Razorpay({
@@ -149,81 +164,162 @@ export const verifyPayment = async (req, res) => {
             });
         }
 
-        // ── 2. Signature is valid → Create Booking ────────
+        // ── 2. Signature is valid → Create Booking inside a transaction ──────
         const travelDateStr =
             typeof travelDate === "string"
                 ? travelDate
                 : new Date(travelDate).toISOString().split("T")[0];
 
-        // Generate unique 10-digit PNR
-        let bookingNumber;
-        let isUnique = false;
-        while (!isUnique) {
-            bookingNumber = Math.floor(1000000000 + Math.random() * 9000000000).toString();
-            const existing = await Booking.findOne({ where: { booking_number: bookingNumber } });
-            if (!existing) isUnique = true;
-        }
-
         const seatIds = seats.map(s => s.seatId);
 
-        // Create booking record with confirmed + paid status
-        const booking = await Booking.create({
-            booking_number: bookingNumber,
-            contact_name: contactName,
-            email: email,
-            user_id: userId || null,
-            train_id: trainId,
-            source_station: sourceStation,
-            destination_station: destinationStation,
-            travel_date: travelDateStr,
-            total_amount: Number(totalAmount) || 0,
-            booking_status: "confirmed",
-            payment_status: "paid",
-        });
-
-        // Create passenger records
-        const passengerPromises = passengers.map(async (passenger, index) => {
-            return Passenger.create({
-                booking_id: booking.booking_id,
-                seat_id: seats[index].seatId,
-                passenger_name: passenger.name,
-                passenger_gender: passenger.gender,
-            });
-        });
-        await Promise.all(passengerPromises);
-
-        // ── 3. Release locks & emit sockets ──────────────
-        if (socketId) {
-            for (const seatId of seatIds) {
-                const key = `${seatId}_${travelDateStr}`;
-                activeLocks.delete(key);
-            }
-        }
+        let txn;
+        let completeBooking;
 
         try {
-            const io = getIO();
-            io.emit("seats-booked", { seatIds, date: travelDateStr, trainId });
-        } catch (e) {
-            console.error("Failed to emit seats-booked:", e);
-        }
+            txn = await sequelize.transaction({
+                isolationLevel: Transaction.ISOLATION_LEVELS.READ_COMMITTED,
+            });
 
-        // ── 4. Fetch full booking with relations ─────────
-        const completeBooking = await Booking.findByPk(booking.booking_id, {
-            include: [
-                { model: Train, as: "train" },
-                {
-                    model: Passenger,
-                    as: "passengers",
-                    include: [
-                        {
-                            model: Seat,
-                            as: "seat",
-                            include: [{ model: Coach, as: "coach" }],
+            // ── SELECT FOR UPDATE: acquire pessimistic row-level locks ────────
+            // Prevents any concurrent transaction from reading / writing these
+            // seat rows until we commit or roll back.
+            const lockedSeats = await Seat.findAll({
+                where: { seat_id: seatIds },
+                lock: txn.LOCK.UPDATE,
+                transaction: txn,
+            });
+
+            // ── Conflict check: reject if any seat is already booked ──────────
+            const alreadyBookedPassengers = await Passenger.findAll({
+                where: { seat_id: seatIds },
+                include: [
+                    {
+                        model: Booking,
+                        as: "booking",
+                        where: {
+                            travel_date: travelDateStr,
+                            booking_status: ["confirmed", "pending"],
                         },
-                    ],
+                        required: true,
+                    },
+                ],
+                transaction: txn,
+                lock: txn.LOCK.UPDATE,
+            });
+
+            if (alreadyBookedPassengers.length > 0) {
+                await txn.rollback();
+                const conflictSeatIds = [
+                    ...new Set(alreadyBookedPassengers.map(p => p.seat_id)),
+                ];
+                return res.status(409).json({
+                    error: "One or more seats were booked by another user just now. Please refresh and choose different seats.",
+                    verified: false,
+                    conflictSeatIds,
+                });
+            }
+
+            // ── Generate unique 10-digit PNR ──────────────────────────────────
+            let bookingNumber;
+            let isUnique = false;
+            while (!isUnique) {
+                bookingNumber = Math.floor(1000000000 + Math.random() * 9000000000).toString();
+                const existing = await Booking.findOne({
+                    where: { booking_number: bookingNumber },
+                    transaction: txn,
+                });
+                if (!existing) isUnique = true;
+            }
+
+            // ── Create booking record with confirmed + paid status ────────────
+            const booking = await Booking.create(
+                {
+                    booking_number: bookingNumber,
+                    contact_name: contactName,
+                    email: email,
+                    user_id: userId || null,
+                    train_id: trainId,
+                    source_station: sourceStation,
+                    destination_station: destinationStation,
+                    travel_date: travelDateStr,
+                    total_amount: Number(totalAmount) || 0,
+                    booking_status: "confirmed",
+                    payment_status: "paid",
                 },
-            ],
-        });
+                { transaction: txn }
+            );
+
+            // ── Create passenger records ──────────────────────────────────────
+            await Promise.all(
+                passengers.map((passenger, index) =>
+                    Passenger.create(
+                        {
+                            booking_id: booking.booking_id,
+                            seat_id: seats[index].seatId,
+                            passenger_name: passenger.name,
+                            passenger_gender: passenger.gender,
+                        },
+                        { transaction: txn }
+                    )
+                )
+            );
+
+            await txn.commit();
+
+            // ── Post-commit: release in-memory locks ──────────────────────────
+            if (socketId) {
+                for (const seatId of seatIds) {
+                    activeLocks.delete(`${seatId}_${travelDateStr}`);
+                }
+            }
+
+            // Determine coach_id from the first locked seat (for richer payload)
+            const coachId = lockedSeats[0]?.coach_id ?? null;
+
+            // Legacy event (backward compat with existing seat-map listeners)
+            try {
+                const io = getIO();
+                io.emit("seats-booked", { seatIds, date: travelDateStr, trainId });
+            } catch (e) {
+                console.error("Failed to emit seats-booked:", e);
+            }
+
+            // New structured event — consumed by TanStack Query cache invalidation
+            emitSeatStatusUpdate({ trainId, coachId, seatIds, date: travelDateStr });
+
+            // ── 4. Fetch full booking with relations ──────────────────────────
+            completeBooking = await Booking.findByPk(booking.booking_id, {
+                include: [
+                    { model: Train, as: "train" },
+                    {
+                        model: Passenger,
+                        as: "passengers",
+                        include: [
+                            {
+                                model: Seat,
+                                as: "seat",
+                                include: [{ model: Coach, as: "coach" }],
+                            },
+                        ],
+                    },
+                ],
+            });
+        } catch (txnError) {
+            if (txn && !txn.finished) {
+                try { await txn.rollback(); } catch (_) {}
+            }
+
+            if (isDeadlockOrTimeout(txnError)) {
+                console.warn("⚠️  DB deadlock/timeout during payment verification:", txnError.message);
+                return res.status(503).json({
+                    error: "The server is under heavy load. Please wait a moment and try again.",
+                    verified: false,
+                    retryable: true,
+                });
+            }
+
+            throw txnError; // re-throw to outer catch for generic 500
+        }
 
         return res.status(200).json({
             verified: true,

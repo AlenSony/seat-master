@@ -10,6 +10,10 @@ interface SeatProps {
   seat: SeatType;
   onSelect: (seat: SeatType) => void;
   isSelected: boolean;
+  /** Seat is on the recommended (lighter) side — glows green */
+  isRecommended?: boolean;
+  /** Selecting this seat would worsen imbalance — dimmed with amber tint */
+  isBalanceBlocked?: boolean;
 }
 
 const seatTypeLabels: Record<SeatTypeEnum, string> = {
@@ -23,28 +27,40 @@ const seatTypeLabels: Record<SeatTypeEnum, string> = {
   'middle-seat': 'Middle Seat',
 };
 
-export const Seat = ({ seat, onSelect, isSelected }: SeatProps) => {
+export const Seat = ({ seat, onSelect, isSelected, isRecommended, isBalanceBlocked }: SeatProps) => {
+  const isAvailable = seat.status === 'available';
+
   const getStatusClass = (): string => {
     if (isSelected) return 'seat-selected';
     switch (seat.status) {
-      case 'available':
-        return 'seat-available';
-      case 'booked':
-        return 'seat-booked';
-      case 'locked':
-        return 'seat-locked';
-      default:
-        return 'seat-available';
+      case 'available': return 'seat-available';
+      case 'booked':   return 'seat-booked';
+      case 'locked':   return 'seat-locked';
+      default:         return 'seat-available';
     }
   };
 
   const handleClick = () => {
-    if (seat.status === 'available' || isSelected) {
-      onSelect(seat);
-    }
+    if (isAvailable || isSelected) onSelect(seat);
   };
 
-  const isClickable = seat.status === 'available' || isSelected;
+  const isClickable = isAvailable || isSelected;
+
+  // ── Overlay style for balance guidance ────────────────────────────────────
+  // Recommended: subtle teal glow ring + brightened appearance
+  // Blocked:     amber tint + reduced opacity (still clickable — SeatBooking guards it)
+  const overlayStyle: React.CSSProperties = (() => {
+    if (isSelected || !isAvailable) return {};
+    if (isRecommended) return {
+      boxShadow: '0 0 0 2px #10b981, 0 0 10px 2px rgba(16,185,129,0.35)',
+      filter: 'brightness(1.08)',
+    };
+    if (isBalanceBlocked) return {
+      opacity: 0.45,
+      filter: 'sepia(0.6) brightness(0.85)',
+    };
+    return {};
+  })();
 
   return (
     <Tooltip>
@@ -52,12 +68,15 @@ export const Seat = ({ seat, onSelect, isSelected }: SeatProps) => {
         <button
           onClick={handleClick}
           disabled={!isClickable}
+          style={overlayStyle}
           className={cn(
             'seat-base',
             getStatusClass(),
-            !isClickable && 'cursor-not-allowed'
+            !isClickable && 'cursor-not-allowed',
+            // Extra transition so the glow animates in smoothly
+            'transition-all duration-200'
           )}
-          aria-label={`Seat ${seat.number} - ${seatTypeLabels[seat.type]} - ${seat.status}`}
+          aria-label={`Seat ${seat.number} - ${seatTypeLabels[seat.type]} - ${seat.status}${isRecommended ? ' (Recommended)' : ''}${isBalanceBlocked ? ' (Causes Imbalance)' : ''}`}
         >
           {seat.number}
         </button>
@@ -70,19 +89,26 @@ export const Seat = ({ seat, onSelect, isSelected }: SeatProps) => {
           <div className="text-sm font-bold">Seat {seat.number}</div>
           <div className="text-xs text-muted-foreground">{seatTypeLabels[seat.type]}</div>
           {seat.price > 0 ? (
-            <div className="font-mono text-sm font-bold text-emerald-600">
-              ₹{seat.price}
-            </div>
+            <div className="font-mono text-sm font-bold text-emerald-600">₹{seat.price}</div>
           ) : (
-            <div className="text-xs text-muted-foreground animate-pulse">
-              Updating fare...
+            <div className="text-xs text-muted-foreground animate-pulse">Updating fare...</div>
+          )}
+          {/* Balance guidance badge */}
+          {isRecommended && !isSelected && (
+            <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-500 mt-0.5">
+              ✦ Recommended
+            </div>
+          )}
+          {isBalanceBlocked && !isSelected && (
+            <div className="text-[10px] font-bold uppercase tracking-wider text-amber-500 mt-0.5">
+              ⚠ Causes Imbalance
             </div>
           )}
           <div className={cn(
             "text-[10px] font-bold uppercase tracking-wider mt-1",
             seat.status === 'available' ? 'text-emerald-500' :
-            seat.status === 'booked' ? 'text-rose-500' :
-            seat.status === 'locked' ? 'text-amber-500' : 'text-slate-500'
+            seat.status === 'booked'    ? 'text-rose-500'    :
+            seat.status === 'locked'    ? 'text-amber-500'   : 'text-slate-500'
           )}>
             {isSelected ? 'Selected' : seat.status}
           </div>

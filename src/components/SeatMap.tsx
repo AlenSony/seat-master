@@ -7,6 +7,10 @@ interface SeatMapProps {
   coach: CoachLayout;
   selectedSeats: SeatType[];
   onSeatSelect: (seat: SeatType) => void;
+  /** IDs of seats on the recommended side — shown with a green glow */
+  recommendedSeatIds?: Set<string>;
+  /** IDs of seats whose selection would worsen the imbalance — dimmed */
+  blockedSeatIds?: Set<string>;
 }
 
 const CompartmentDivider = () => (
@@ -29,10 +33,20 @@ const BerthLabel = ({ label, position }: { label: string; position: 'left' | 'ri
   </span>
 );
 
-export const SeatMap = ({ coach, selectedSeats, onSeatSelect }: SeatMapProps) => {
-  const isSeatSelected = (seat: SeatType) => 
+export const SeatMap = ({ coach, selectedSeats, onSeatSelect, recommendedSeatIds, blockedSeatIds }: SeatMapProps) => {
+  const isSeatSelected = (seat: SeatType) =>
     selectedSeats.some(s => s.id === seat.id);
 
+  /** Helper to build balance-guidance props for a given seat */
+  const guidanceProps = (seat: SeatType) => {
+    if (!recommendedSeatIds && !blockedSeatIds) return {};
+    const avail = seat.status === 'available' && !isSeatSelected(seat);
+    if (!avail) return {};
+    return {
+      isRecommended:    recommendedSeatIds?.has(seat.id) ?? false,
+      isBalanceBlocked: blockedSeatIds?.has(seat.id)     ?? false,
+    };
+  };
   const renderSleeperLayout = () => {
     const compartmentCount = Math.floor(coach.rows.length / 2);
 
@@ -80,14 +94,14 @@ export const SeatMap = ({ coach, selectedSeats, onSeatSelect }: SeatMapProps) =>
                 </div>
                 <div className="flex gap-2">
                   {row1.map(seat => seat && (
-                    <Seat key={seat.id} seat={seat} onSelect={onSeatSelect} isSelected={isSeatSelected(seat)} />
+                    <Seat key={seat.id} seat={seat} onSelect={onSeatSelect} isSelected={isSeatSelected(seat)} {...guidanceProps(seat)} />
                   ))}
                 </div>
                 <div className="w-8 flex items-center justify-center">
                   <div className="w-px h-8 bg-border" />
                 </div>
                 <div className="w-11">
-                  {sl && <Seat key={sl.id} seat={sl} onSelect={onSeatSelect} isSelected={isSeatSelected(sl)} />}
+                  {sl && <Seat key={sl.id} seat={sl} onSelect={onSeatSelect} isSelected={isSeatSelected(sl)} {...guidanceProps(sl)} />}
                 </div>
               </div>
 
@@ -101,14 +115,14 @@ export const SeatMap = ({ coach, selectedSeats, onSeatSelect }: SeatMapProps) =>
                 </div>
                 <div className="flex gap-2">
                   {row2.map(seat => seat && (
-                    <Seat key={seat.id} seat={seat} onSelect={onSeatSelect} isSelected={isSeatSelected(seat)} />
+                    <Seat key={seat.id} seat={seat} onSelect={onSeatSelect} isSelected={isSeatSelected(seat)} {...guidanceProps(seat)} />
                   ))}
                 </div>
                 <div className="w-8 flex items-center justify-center">
                   <div className="w-px h-8 bg-border" />
                 </div>
                 <div className="w-11">
-                  {su && <Seat key={su.id} seat={su} onSelect={onSeatSelect} isSelected={isSeatSelected(su)} />}
+                  {su && <Seat key={su.id} seat={su} onSelect={onSeatSelect} isSelected={isSeatSelected(su)} {...guidanceProps(su)} />}
                 </div>
               </div>
             </div>
@@ -165,14 +179,14 @@ export const SeatMap = ({ coach, selectedSeats, onSeatSelect }: SeatMapProps) =>
                 </div>
                 <div className="flex gap-2">
                   {row1.map(seat => seat && (
-                    <Seat key={seat.id} seat={seat} onSelect={onSeatSelect} isSelected={isSeatSelected(seat)} />
+                    <Seat key={seat.id} seat={seat} onSelect={onSeatSelect} isSelected={isSeatSelected(seat)} {...guidanceProps(seat)} />
                   ))}
                 </div>
                 <div className="w-8 flex items-center justify-center">
                   <div className="w-px h-8 bg-border" />
                 </div>
                 <div className="w-11">
-                  {sl && <Seat key={sl.id} seat={sl} onSelect={onSeatSelect} isSelected={isSeatSelected(sl)} />}
+                  {sl && <Seat key={sl.id} seat={sl} onSelect={onSeatSelect} isSelected={isSeatSelected(sl)} {...guidanceProps(sl)} />}
                 </div>
               </div>
 
@@ -185,14 +199,14 @@ export const SeatMap = ({ coach, selectedSeats, onSeatSelect }: SeatMapProps) =>
                 </div>
                 <div className="flex gap-2">
                   {row2.map(seat => seat && (
-                    <Seat key={seat.id} seat={seat} onSelect={onSeatSelect} isSelected={isSeatSelected(seat)} />
+                    <Seat key={seat.id} seat={seat} onSelect={onSeatSelect} isSelected={isSeatSelected(seat)} {...guidanceProps(seat)} />
                   ))}
                 </div>
                 <div className="w-8 flex items-center justify-center">
                   <div className="w-px h-8 bg-border" />
                 </div>
                 <div className="w-11">
-                  {su && <Seat key={su.id} seat={su} onSelect={onSeatSelect} isSelected={isSeatSelected(su)} />}
+                  {su && <Seat key={su.id} seat={su} onSelect={onSeatSelect} isSelected={isSeatSelected(su)} {...guidanceProps(su)} />}
                 </div>
               </div>
             </div>
@@ -250,6 +264,7 @@ export const SeatMap = ({ coach, selectedSeats, onSeatSelect }: SeatMapProps) =>
                 seat={seat}
                 onSelect={onSeatSelect}
                 isSelected={isSeatSelected(seat)}
+                {...guidanceProps(seat)}
               />
             ))}
           </div>
@@ -267,6 +282,7 @@ export const SeatMap = ({ coach, selectedSeats, onSeatSelect }: SeatMapProps) =>
                 seat={seat}
                 onSelect={onSeatSelect}
                 isSelected={isSeatSelected(seat)}
+                {...guidanceProps(seat)}
               />
             ))}
           </div>
@@ -292,7 +308,7 @@ export const SeatMap = ({ coach, selectedSeats, onSeatSelect }: SeatMapProps) =>
 
   return (
     <div className="animate-fade-in">
-      <SeatLegend />
+      <SeatLegend showBalanceGuide={!!(recommendedSeatIds && recommendedSeatIds.size > 0)} />
 
       <div className="mt-4 rounded-2xl border border-border shadow-md overflow-hidden">
         {/* Coach header bar */}

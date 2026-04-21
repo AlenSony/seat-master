@@ -1,15 +1,22 @@
 import { BookingSummary } from '@/components/BookingSummary';
 import { CoachSelector } from '@/components/CoachSelector';
+import ImbalanceModal from '@/components/ImbalanceModal';
 import Navbar from '@/components/Navbar';
 import { PassengerDetails, PassengerForm } from '@/components/PassengerForm';
 import { SeatMap } from '@/components/SeatMap';
 import { Button } from '@/components/ui/button';
 import { SeatType as BerthType, CoachLayout, CoachRow, Seat as SeatType } from '@/data/coachLayouts';
 import { API_BASE, getStoredUser } from '@/lib/api';
+import {
+  calculateFrontendCoachBalance,
+  CoachBalanceResult,
+  CoachBalanceSocketPayload,
+  SeatWithPosition,
+} from '@/utils/coachBalance';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertCircle, ArrowLeft, ArrowRight, CalendarDays, MapPin, Train } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import { toast } from 'sonner';
@@ -45,6 +52,11 @@ const SeatBooking = () => {
   const [lockedAPISeatIds, setLockedAPISeatIds] = useState<Set<string>>(new Set());
   const [disabilityType, setDisabilityType] = useState<string>('');
   const [socket, setSocket] = useState<Socket | null>(null);
+
+  // ── Lateral Weight Distribution state ─────────────────────────────────────
+  const [coachBalance, setCoachBalance] = useState<CoachBalanceResult | null>(null);
+  const [showImbalanceModal, setShowImbalanceModal] = useState(false);
+  const [imbalanceModalData, setImbalanceModalData] = useState<Partial<CoachBalanceResult>>({});
 
   // Map DB berth_type codes → frontend BerthType string union
   const mapBerthType = (berth: string): BerthType => {
@@ -189,6 +201,14 @@ const SeatBooking = () => {
       // Invalidate the server-side availability cache so the next render gets
       // fresh data from the DB (handles edge cases where optimistic update diverges)
       queryClient.invalidateQueries({ queryKey: ['seatAvailability', trainId, isoDate] });
+    });
+
+    // ── coach_balance_updated: refresh Stability Gauge for all clients ───────
+    newSocket.on('coach_balance_updated', (payload: CoachBalanceSocketPayload) => {
+      if (String(payload.train_id) !== String(trainId)) return;
+      if (payload.date && payload.date !== isoDate) return;
+      // Update the balance display (if user has no pending selections, show live state)
+      setCoachBalance(payload.balance);
     });
 
     return () => {
@@ -365,6 +385,43 @@ const SeatBooking = () => {
     fetchFares();
   }, [selectedCoach, train?.id, journeyDistance, rawCoaches.length, bookedSeatIds, lockedAPISeatIds]);
 
+  // ── Derived guidance sets (computed from balance, not stored as state) ──────
+  // These drive the per-seat highlighting without requiring an extra render cycle.
+  const { recommendedSeatIds, blockedSeatIds } = useMemo(() => {
+    if (!coachBalance || coachBalance.belowThreshold) {
+      return { recommendedSeatIds: undefined, blockedSeatIds: undefined };
+    }
+
+    const coachData = rawCoaches.find(c => c.coach_number === selectedCoach);
+    if (!coachData) return { recommendedSeatIds: undefined, blockedSeatIds: undefined };
+
+    // Determine which side is heavier
+    const leftHeavier = coachBalance.occupiedLeft > coachBalance.occupiedRight;
+
+    const recommended = new Set<string>();
+    const blocked     = new Set<string>();
+
+    for (const s of (coachData.seats || [])) {
+      const id  = String(s.seat_id);
+      const col = s.column_index ?? 0;
+      const isLeft = col <= 2;
+
+      // Only tag available seats (no point highlighting booked/locked)
+      if (bookedSeatIds.has(id) || lockedAPISeatIds.has(id)) continue;
+
+      if (leftHeavier) {
+        // Add to right side (col 3-4) → recommended; left → potentially worsening
+        if (!isLeft) recommended.add(id);
+        else if (coachBalance.balanceFactor >= 0.35) blocked.add(id);
+      } else {
+        if (isLeft)  recommended.add(id);
+        else if (coachBalance.balanceFactor >= 0.35) blocked.add(id);
+      }
+    }
+
+    return { recommendedSeatIds: recommended, blockedSeatIds: blocked };
+  }, [coachBalance, rawCoaches, selectedCoach, bookedSeatIds, lockedAPISeatIds]);
+
   const handleSeatSelect = (seat: SeatType) => {
     // Senior Citizen Quota (SS) Validation
     if (quota === "SS" && !["lower", "side-lower"].includes(seat.type)) {
@@ -381,25 +438,85 @@ const SeatBooking = () => {
     }
 
     const isSelected = selectedSeats.some(s => s.id === seat.id);
-    
+    const newSelectedSeats = isSelected
+      ? selectedSeats.filter(s => s.id !== seat.id)
+      : [...selectedSeats, seat];
+
+    if (!isSelected && selectedSeats.length >= 6) {
+      setShowError(true);
+      toast.error('Maximum 6 seats can be selected at once');
+      setTimeout(() => setShowError(false), 3000);
+      return;
+    }
+
+    // ── Hard balance block: reject if this seat tips the coach into critical imbalance ──
+    if (!isSelected && coachBalance && !coachBalance.belowThreshold) {
+      const coachData = rawCoaches.find(c => c.coach_number === selectedCoach);
+      if (coachData && coachLayouts[selectedCoach]) {
+        const allSeatsInCoach: SeatWithPosition[] = (coachData.seats || []).map((s: any) => ({
+          id: String(s.seat_id),
+          columnIndex: s.column_index ?? 0,
+        }));
+        const testResult = calculateFrontendCoachBalance(
+          allSeatsInCoach,
+          bookedSeatIds,
+          [...selectedSeats.map(s => s.id), seat.id],
+          coachLayouts[selectedCoach].totalSeats
+        );
+        if (!testResult.safe) {
+          toast.warning(
+            `⚠️ Seat ${seat.number} would cause coach imbalance. Please select a seat on the highlighted (green) side.`,
+            { duration: 4000, id: 'balance-block' }
+          );
+          return; // block the selection
+        }
+      }
+    }
+
+    setSelectedSeats(newSelectedSeats);
     if (isSelected) {
-      setSelectedSeats(prev => prev.filter(s => s.id !== seat.id));
       toast.info(`Seat ${seat.number} removed`);
     } else {
-      if (selectedSeats.length >= 6) {
-        setShowError(true);
-        toast.error('Maximum 6 seats can be selected at once');
-        setTimeout(() => setShowError(false), 3000);
-        return;
-      }
-      setSelectedSeats(prev => [...prev, seat]);
       toast.success(`Seat ${seat.number} selected`);
+    }
+
+    // ── Recalculate balance after successful selection ───────────────────────
+    const coachData = rawCoaches.find(c => c.coach_number === selectedCoach);
+    if (coachData && coachLayouts[selectedCoach]) {
+      const allSeatsInCoach: SeatWithPosition[] = (coachData.seats || []).map((s: any) => ({
+        id: String(s.seat_id),
+        columnIndex: s.column_index ?? 0,
+      }));
+      const result = calculateFrontendCoachBalance(
+        allSeatsInCoach,
+        bookedSeatIds,
+        newSelectedSeats.map(s => s.id),
+        coachLayouts[selectedCoach].totalSeats
+      );
+      setCoachBalance(result);
     }
   };
 
   const handleRemoveSeat = (seat: SeatType) => {
-    setSelectedSeats(prev => prev.filter(s => s.id !== seat.id));
+    const newSeats = selectedSeats.filter(s => s.id !== seat.id);
+    setSelectedSeats(newSeats);
     toast.info(`Seat ${seat.number} removed`);
+
+    // Recalculate balance when a seat is removed
+    const coachData = rawCoaches.find(c => c.coach_number === selectedCoach);
+    if (coachData && coachLayouts[selectedCoach]) {
+      const allSeatsInCoach: SeatWithPosition[] = (coachData.seats || []).map((s: any) => ({
+        id: String(s.seat_id),
+        columnIndex: s.column_index ?? 0,
+      }));
+      const result = calculateFrontendCoachBalance(
+        allSeatsInCoach,
+        bookedSeatIds,
+        newSeats.map(s => s.id),
+        coachLayouts[selectedCoach].totalSeats
+      );
+      setCoachBalance(result);
+    }
   };
 
   const handleConfirm = () => {
@@ -544,6 +661,13 @@ const SeatBooking = () => {
             const verifyData = await verifyRes.json();
 
             if (!verifyRes.ok || !verifyData.verified) {
+              // Detect imbalance error from backend booking step
+              if (verifyData.errorCode === 'ERR_IMBALANCE_LIMIT') {
+                const err: any = new Error('ERR_IMBALANCE_LIMIT');
+                err.errorCode = 'ERR_IMBALANCE_LIMIT';
+                err.balance = verifyData.balance;
+                throw err;
+              }
               throw new Error(verifyData.error || 'Payment verification failed.');
             }
 
@@ -595,7 +719,13 @@ const SeatBooking = () => {
 
     } catch (error: any) {
       console.error('Booking Error:', error);
-      toast.error(`Booking Failed: ${error.message}`);
+      // ── Handle ERR_IMBALANCE_LIMIT from backend ──────────────────────────
+      if (error?.errorCode === 'ERR_IMBALANCE_LIMIT' || error?.message?.includes('ERR_IMBALANCE_LIMIT')) {
+        setImbalanceModalData(error.balance || {});
+        setShowImbalanceModal(true);
+      } else {
+        toast.error(`Booking Failed: ${error.message}`);
+      }
       setIsLoading(false);
     }
   };
@@ -605,6 +735,7 @@ const SeatBooking = () => {
         socket.emit("cancel-booking");
     }
     setShowPassengerForm(false);
+    setCoachBalance(null); // reset gauge on back
   };
 
   const handleChangeCoach = () => {
@@ -613,6 +744,8 @@ const SeatBooking = () => {
     }
     setSelectedSeats([]);
     setShowPassengerForm(false);
+    setCoachBalance(null);
+    setBalanceWarningSent(false);
   };
 
   if (isLoading) {
@@ -771,6 +904,8 @@ const SeatBooking = () => {
                       coach={currentCoach}
                       selectedSeats={selectedSeats}
                       onSeatSelect={handleSeatSelect}
+                      recommendedSeatIds={recommendedSeatIds}
+                      blockedSeatIds={blockedSeatIds}
                     />
                   </div>
                 )}
@@ -795,6 +930,13 @@ const SeatBooking = () => {
           )}
         </AnimatePresence>
       </main>
+
+      {/* Imbalance Education Modal */}
+      <ImbalanceModal
+        open={showImbalanceModal}
+        onClose={() => setShowImbalanceModal(false)}
+        balance={imbalanceModalData}
+      />
     </div>
   );
 };

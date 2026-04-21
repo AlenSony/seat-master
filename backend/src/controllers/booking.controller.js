@@ -1,6 +1,7 @@
 import { Transaction } from "sequelize";
 import { Booking, Coach, Passenger, Seat, Train, sequelize } from "../models/index.js";
-import { activeLocks, emitSeatStatusUpdate, getIO } from "../sockets.js";
+import { activeLocks, emitSeatStatusUpdate, emitCoachBalanceUpdate, getIO } from "../sockets.js";
+import { calculateCoachBalance } from "../utils/coachBalance.js";
 
 // ── Detect transient DB errors worth logging distinctly ───────────────────────
 const isDeadlockOrTimeout = (err) => {
@@ -102,6 +103,36 @@ export const createBooking = async (req, res) => {
       transaction: t,
     });
 
+    // ── Lateral Weight Distribution (LWD) safety check ──────────────────────
+    // Runs immediately after the pessimistic lock so it sees the most up-to-date
+    // occupancy data. Only blocks if total occupancy > 40% AND the imbalance
+    // exceeds 15% of coach capacity, preventing CoG-shift on high-speed curves.
+    if (lockedSeats.length > 0) {
+      const coachId = lockedSeats[0].coach_id;
+      const balanceResult = await calculateCoachBalance(
+        coachId,
+        seatIds.map(Number),
+        travelDateStr,
+        t
+      );
+
+      if (!balanceResult.safe) {
+        await t.rollback();
+        return res.status(400).json({
+          error:
+            "Coach imbalance detected. Selecting these seats would create unsafe lateral weight distribution.",
+          errorCode: "ERR_IMBALANCE_LIMIT",
+          balance: {
+            occupiedLeft: balanceResult.occupiedLeft,
+            occupiedRight: balanceResult.occupiedRight,
+            imbalance: balanceResult.imbalance,
+            imbalanceLimit: balanceResult.imbalanceLimit,
+            balanceFactor: balanceResult.balanceFactor,
+          },
+        });
+      }
+    }
+
     // ── Conflict check: look for existing confirmed bookings for these seats ──
     // We join Passengers → Bookings for the same travel date (non-cancelled).
     const alreadyBookedPassengers = await Passenger.findAll({
@@ -193,6 +224,25 @@ export const createBooking = async (req, res) => {
 
     // Emit new seat_status_updated event consumed by React + TanStack Query
     emitSeatStatusUpdate({ trainId, coachId, seatIds, date: travelDateStr });
+
+    // Emit coach_balance_updated so all clients' Stability Gauges refresh
+    if (coachId) {
+      try {
+        const postCommitBalance = await calculateCoachBalance(
+          coachId,
+          [], // no pending — we just committed them
+          travelDateStr
+        );
+        emitCoachBalanceUpdate({
+          trainId,
+          coachId,
+          date: travelDateStr,
+          balance: postCommitBalance,
+        });
+      } catch (balErr) {
+        console.warn("Failed to emit coach_balance_updated:", balErr.message);
+      }
+    }
 
     // ── Return full booking ──────────────────────────────────────────────────
     const completeBooking = await Booking.findByPk(booking.booking_id, {

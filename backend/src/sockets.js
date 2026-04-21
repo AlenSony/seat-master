@@ -189,6 +189,37 @@ export const emitSeatStatusUpdate = ({ trainId, coachId, seatIds, date }) => {
     }
 };
 
+/**
+ * Broadcast a coach_balance_updated event to all clients so their
+ * CoachStabilityGauge components can re-render with the latest balance data.
+ *
+ * @param {object} payload
+ * @param {string|number} payload.trainId
+ * @param {string|number} payload.coachId
+ * @param {string}        payload.date
+ * @param {object}        payload.balance  - calculateCoachBalance() result
+ */
+export const emitCoachBalanceUpdate = ({ trainId, coachId, date, balance }) => {
+    if (!io) {
+        console.warn("emitCoachBalanceUpdate called before Socket.io was initialized");
+        return;
+    }
+    try {
+        io.emit("coach_balance_updated", {
+            train_id: trainId,
+            coach_id: coachId,
+            date,
+            balance,
+        });
+        console.log(
+            `[socket] coach_balance_updated — train=${trainId} coach=${coachId} ` +
+            `L=${balance.occupiedLeft} R=${balance.occupiedRight} safe=${balance.safe}`
+        );
+    } catch (e) {
+        console.error("Failed to emit coach_balance_updated:", e);
+    }
+};
+
 export const getIO = () => {
     if (!io) throw new Error("Socket.io not initialized");
     return io;

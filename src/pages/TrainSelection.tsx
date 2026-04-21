@@ -19,7 +19,7 @@ import { API_BASE, getStoredUser } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ArrowLeft, ArrowRight, BanIcon, CalendarDays, Clock, MapPin, MapPinOff, Radio, Train as TrainIcon, UtensilsCrossed, Wifi } from 'lucide-react';
+import { ArrowLeft, ArrowRight, ArrowRightLeft, BanIcon, CalendarDays, Check, Clock, Edit2, MapPin, MapPinOff, Radio, Train as TrainIcon, UtensilsCrossed, Wifi, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
@@ -64,13 +64,42 @@ const TrainSelection = () => {
   
   const [trains, setTrains] = useState<TrainData[]>([]);
   const [stations, setStations] = useState<string[]>([]);
+  const [allStations, setAllStations] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Modify search inline panel state
+  const [isSearchEditing, setIsSearchEditing] = useState(false);
+  const [tempSource, setTempSource] = useState<string>('');
+  const [tempDest, setTempDest] = useState<string>('');
+  const [tempDate, setTempDate] = useState<Date | undefined>(undefined);
 
   // New state for intermediate stops
   const [trainStops, setTrainStops] = useState<TrainStop[]>([]);
   const [boardingStop, setBoardingStop] = useState<string>('');
   const [droppingStop, setDroppingStop] = useState<string>('');
   const [stopsLoading, setStopsLoading] = useState(false);
+
+  // Fetch all stations once for the modify-search dropdowns
+  useEffect(() => {
+    const fetchAllStations = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/trains`);
+        const data = await res.json();
+        const names: string[] = Array.from(
+          new Set(
+            data.flatMap((t: any) => [
+              t.source_station,
+              t.destination_station,
+            ]).filter(Boolean)
+          )
+        ) as string[];
+        setAllStations(names.sort());
+      } catch (e) {
+        console.error('Failed to fetch all stations for modify search:', e);
+      }
+    };
+    fetchAllStations();
+  }, []);
 
   useEffect(() => {
     const fetchTrains = async () => {
@@ -663,7 +692,199 @@ const TrainSelection = () => {
             transition={{ delay: 0.2 }}
             className="lg:col-span-8 space-y-6 pb-20"
           >
-            <div className="flex items-center justify-between mb-2">
+            {/* ── Modify Search Panel ── */}
+            <AnimatePresence mode="wait">
+            {isSearchEditing ? (
+              <motion.div
+                key="edit-mode"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="bg-white/90 backdrop-blur-xl border border-blue-200 rounded-2xl shadow-lg shadow-blue-900/5 p-4"
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                    <Edit2 className="w-4 h-4 text-blue-600" />
+                    Modify Search
+                  </p>
+                  <button
+                    onClick={() => setIsSearchEditing(false)}
+                    className="text-slate-400 hover:text-slate-600 transition-colors p-1 rounded-lg hover:bg-slate-100"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="grid sm:grid-cols-3 gap-3">
+                  {/* From */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 px-1">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      From
+                    </label>
+                    <Select value={tempSource} onValueChange={setTempSource}>
+                      <SelectTrigger className={cn(
+                        "h-11 bg-white border-slate-200 rounded-xl text-sm transition-all hover:border-emerald-300",
+                        tempSource && "border-emerald-400/60 ring-2 ring-emerald-500/10"
+                      )}>
+                        <div className="flex items-center gap-2 px-0.5">
+                          <MapPin className={cn("w-4 h-4 flex-shrink-0", tempSource ? "text-emerald-600" : "text-slate-300")} />
+                          <SelectValue placeholder="Departing from" />
+                        </div>
+                      </SelectTrigger>
+                      <SelectContent className="max-h-[260px]">
+                        {allStations.map((s) => (
+                          <SelectItem key={s} value={s} disabled={s === tempDest} className="py-2.5 focus:bg-emerald-50">
+                            {s}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* To */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 px-1">
+                      <div className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                      To
+                    </label>
+                    <Select value={tempDest} onValueChange={setTempDest}>
+                      <SelectTrigger className={cn(
+                        "h-11 bg-white border-slate-200 rounded-xl text-sm transition-all hover:border-rose-300",
+                        tempDest && "border-rose-400/60 ring-2 ring-rose-500/10"
+                      )}>
+                        <div className="flex items-center gap-2 px-0.5">
+                          <MapPin className={cn("w-4 h-4 flex-shrink-0", tempDest ? "text-rose-600" : "text-slate-300")} />
+                          <SelectValue placeholder="Going to" />
+                        </div>
+                      </SelectTrigger>
+                      <SelectContent className="max-h-[260px]">
+                        {allStations.map((s) => (
+                          <SelectItem key={s} value={s} disabled={s === tempSource} className="py-2.5 focus:bg-rose-50">
+                            {s}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Date */}
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 px-1">
+                      <CalendarDays className="w-3.5 h-3.5" />
+                      Date
+                    </label>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button
+                          variant="outline"
+                          className={cn(
+                            "w-full h-11 justify-start text-left font-normal bg-white border-slate-200 text-sm rounded-xl transition-all hover:border-blue-300",
+                            !tempDate && "text-slate-400",
+                            tempDate && "border-blue-400/60 ring-2 ring-blue-500/10"
+                          )}
+                        >
+                          <CalendarDays className={cn("mr-2 h-4 w-4", tempDate ? "text-blue-600" : "text-slate-300")} />
+                          {tempDate ? format(tempDate, "MMM d, yyyy") : "Pick a date"}
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0 rounded-xl shadow-xl border-slate-100" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={tempDate}
+                          onSelect={setTempDate}
+                          disabled={(d) => d < new Date()}
+                          initialFocus
+                          className="p-3"
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+                </div>
+
+                {/* Apply Button */}
+                <div className="mt-3 flex justify-end">
+                  <motion.button
+                    whileHover={{ scale: 1.03 }}
+                    whileTap={{ scale: 0.97 }}
+                    onClick={() => {
+                      if (tempSource) setSource(tempSource);
+                      if (tempDest) setDestination(tempDest);
+                      if (tempDate) setDate(tempDate);
+                      // Reset train selection since route changed
+                      setSelectedTrain('');
+                      setTrainStops([]);
+                      setBoardingStop('');
+                      setDroppingStop('');
+                      setIsSearchEditing(false);
+                    }}
+                    disabled={!tempSource || !tempDest || tempSource === tempDest}
+                    className={cn(
+                      "flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold transition-all",
+                      tempSource && tempDest && tempSource !== tempDest
+                        ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30"
+                        : "bg-slate-100 text-slate-400 cursor-not-allowed"
+                    )}
+                  >
+                    <Check className="w-4 h-4" />
+                    Apply Changes
+                  </motion.button>
+                </div>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="view-mode"
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="bg-white/80 backdrop-blur-xl border border-slate-100 rounded-2xl shadow-sm p-3.5 flex flex-wrap items-center gap-3"
+              >
+                {/* Route pills */}
+                <div className="flex items-center gap-2 flex-1 flex-wrap">
+                  {source ? (
+                    <span className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-100 text-emerald-700 text-sm font-semibold px-3 py-1.5 rounded-full">
+                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      {source}
+                    </span>
+                  ) : (
+                    <span className="text-sm text-slate-400 italic">All origins</span>
+                  )}
+                  <ArrowRightLeft className="w-4 h-4 text-slate-300 flex-shrink-0" />
+                  {destination ? (
+                    <span className="flex items-center gap-1.5 bg-rose-50 border border-rose-100 text-rose-700 text-sm font-semibold px-3 py-1.5 rounded-full">
+                      <div className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                      {destination}
+                    </span>
+                  ) : (
+                    <span className="text-sm text-slate-400 italic">All destinations</span>
+                  )}
+                  {date && (
+                    <>
+                      <span className="text-slate-200 hidden sm:block">•</span>
+                      <span className="flex items-center gap-1.5 bg-blue-50 border border-blue-100 text-blue-700 text-sm font-semibold px-3 py-1.5 rounded-full">
+                        <CalendarDays className="w-3.5 h-3.5" />
+                        {format(date, "MMM d, yyyy")}
+                      </span>
+                    </>
+                  )}
+                </div>
+                {/* Edit Button */}
+                <button
+                  onClick={() => {
+                    setTempSource(source);
+                    setTempDest(destination);
+                    setTempDate(date);
+                    setIsSearchEditing(true);
+                  }}
+                  className="flex items-center gap-1.5 text-xs font-bold text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-100 hover:border-blue-200 px-3 py-2 rounded-xl transition-all flex-shrink-0"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  Modify
+                </button>
+              </motion.div>
+            )}
+            </AnimatePresence>
+
+            <div className="flex items-center justify-between -mt-2">
                 <h2 className="font-display font-bold text-2xl text-slate-900 tracking-tight">
                 {source && destination ? (
                     <span className="flex items-center gap-2">
